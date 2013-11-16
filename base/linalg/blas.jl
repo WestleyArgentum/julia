@@ -1,7 +1,6 @@
 module BLAS
 
 import Base.copy!
-
 export
 # Level 1
     asum,
@@ -34,7 +33,7 @@ export
 
 const libblas = Base.libblas_name
 
-import ..LinAlg: BlasFloat, BlasChar, BlasInt, blas_int, DimensionMismatch
+import ..LinAlg: BlasFloat, BlasChar, BlasInt, blas_int, DimensionMismatch, chksquare
 
 # Level 1
 ## copy
@@ -62,9 +61,9 @@ for (fname, elty) in ((:dscal_,:Float64),
         # SUBROUTINE DSCAL(N,DA,DX,INCX)
         function scal!(n::Integer, DA::$elty, DX::Union(Ptr{$elty},Array{$elty}), incx::Integer)
             ccall(($(string(fname)),libblas), Void,
-                (Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}),
-                 &n, &DA, DX, &incx)
-            return DX
+                  (Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}),
+                  &n, &DA, DX, &incx)
+            DX
         end
     end
 end
@@ -75,9 +74,9 @@ for (fname, elty, celty) in ((:sscal_, :Float32, :Complex64),
     @eval begin
         function scal!(n::Integer, DA::$elty, DX::Union(Ptr{$celty},Array{$celty}), incx::Integer)
             ccall(($(string(fname)),libblas), Void,
-                (Ptr{BlasInt}, Ptr{$elty}, Ptr{$celty}, Ptr{BlasInt}),
-                 &(2*n), &DA, DX, &incx)
-            return DX
+                  (Ptr{BlasInt}, Ptr{$elty}, Ptr{$celty}, Ptr{BlasInt}),
+                  &(2*n), &DA, DX, &incx)
+            DX
         end
     end
 end
@@ -103,9 +102,7 @@ for (fname, elty) in ((:ddot_,:Float64),
 end
 function dot{T<:BlasFloat}(DX::Array{T}, DY::Array{T})
     n = length(DX)
-    if n != length(DY)
-        throw(DimensionMismatch("dot product arguments have lengths $(length(DX)) and $(length(DY))"))
-    end
+    n==length(DY) || throw(DimensionMismatch("dot product arguments have lengths $(length(DX)) and $(length(DY))"))
     dot(n, DX, 1, DY, 1)
 end
 
@@ -163,15 +160,15 @@ for (fname, elty) in ((:daxpy_,:Float64),
     end
 end
 function axpy!{T,Ta<:Number}(alpha::Ta, x::Array{T}, y::Array{T})
-    if length(x) != length(y)
-        throw(DimensionMismatch("arguments must be of the same length"))
-    end
-    return axpy!(length(x), convert(T,alpha), x, 1, y, 1)
+    length(x)==length(y) || throw(DimensionMismatch(""))
+    axpy!(length(x), convert(T,alpha), x, 1, y, 1)
 end
-function axpy!{T,Ta<:Number,Ti<:Integer}(alpha::Ta, x::Array{T}, rx::Union(Range1{Ti},Range{Ti}), y::Array{T}, ry::Union(Range1{Ti},Range{Ti}))
-    if length(rx) != length(ry)
-        throw(DimensionMismatch("ranges must be of the same length"))
-    end
+
+function axpy!{T,Ta<:Number,Ti<:Integer}(alpha::Ta, x::Array{T}, rx::Union(Range1{Ti},Range{Ti}),
+                                         y::Array{T}, ry::Union(Range1{Ti},Range{Ti}))
+
+    length(rx)==length(ry) || throw(DimensionMismatch(""))
+
     if minimum(rx) < 1 || maximum(rx) > length(x) || minimum(ry) < 1 || maximum(ry) > length(y)
         throw(BoundsError())
     end
@@ -361,7 +358,7 @@ for (fname, elty) in ((:dtrmv_,:Float64),
         end
     end
 end
-### trmv, Triangular matrix-vector solve
+### trsv, Triangular matrix-vector solve
 for (fname, elty) in ((:dtrsv_,:Float64),
                         (:strsv_,:Float32),
                         (:ztrsv_,:Complex128),
@@ -447,7 +444,7 @@ for (fname, elty) in ((:zher_,:Complex128),
                  Ptr{BlasInt}, Ptr{$elty}, Ptr{BlasInt}),
                  &uplo, &n, &α, x, 
                  &1, A, &max(1,stride(A,2)))
-            return A
+            A
         end
     end
 end
@@ -486,7 +483,7 @@ for (gemm, elty) in
                  &k, &alpha, A, &max(1,stride(A,2)),
                  B, &max(1,stride(B,2)), &beta, C, 
                  &max(1,stride(C,2)))
-            return C
+            C
         end
         function gemm(transA::BlasChar, transB::BlasChar, alpha::($elty), A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
             gemm!(transA, transB, alpha, A, B, zero($elty), Array($elty, (size(A, transA == 'N' ? 1 : 2), size(B, transB == 'N' ? 2 : 1))))
@@ -522,7 +519,7 @@ for (mfname, elty) in ((:dsymm_,:Float64),
                  &side, &uplo, &m, &n, 
                  &alpha, A, &max(1,stride(A,2)), B, 
                  &max(1,stride(B,2)), &beta, C, &max(1,stride(C,2)))
-            return C
+            C
         end
         function symm(side::BlasChar, uplo::BlasChar, alpha::($elty), A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
             symm!(side, uplo, alpha, A, B, zero($elty), similar(B))
@@ -538,24 +535,25 @@ for (fname, elty) in ((:dsyrk_,:Float64),
                       (:ssyrk_,:Float32),
                       (:zsyrk_,:Complex128),
                       (:csyrk_,:Complex64))
-    @eval begin
-             # SUBROUTINE DSYRK(UPLO,TRANS,N,K,ALPHA,A,LDA,BETA,C,LDC)
-             # *     .. Scalar Arguments ..
-             #       REAL ALPHA,BETA
-             #       INTEGER K,LDA,LDC,N
-             #       CHARACTER TRANS,UPLO
-             # *     .. Array Arguments ..
-             #       REAL A(LDA,*),C(LDC,*)
-        function syrk!(uplo::BlasChar, trans::BlasChar, alpha::($elty), A::StridedVecOrMat{$elty}, beta::($elty), C::StridedMatrix{$elty})
-            m, n = size(C)
-            if m != n throw(DimensionMismatch("Matrix C must be square")) end
-            nn = size(A, trans == 'N' ? 1 : 2)
-            if nn != n throw(DimensionMismatch("")) end
-            k  = size(A, trans == 'N' ? 2 : 1)
-            ccall(($(string(fname)),libblas), Void,
-                (Ptr{Uint8}, Ptr{Uint8}, Ptr{BlasInt}, Ptr{BlasInt}, 
-                 Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}, Ptr{$elty}, 
-                 Ptr{$elty}, Ptr{BlasInt}),
+   @eval begin
+       # SUBROUTINE DSYRK(UPLO,TRANS,N,K,ALPHA,A,LDA,BETA,C,LDC)
+       # *     .. Scalar Arguments ..
+       #       REAL ALPHA,BETA
+       #       INTEGER K,LDA,LDC,N
+       #       CHARACTER TRANS,UPLO
+       # *     .. Array Arguments ..
+       #       REAL A(LDA,*),C(LDC,*)
+       function syrk!(uplo::BlasChar, trans::BlasChar,
+                      alpha::($elty), A::StridedVecOrMat{$elty},
+                      beta::($elty), C::StridedMatrix{$elty})
+           n = chksquare(C)
+           nn = size(A, trans == 'N' ? 1 : 2)
+           if nn != n throw(DimensionMismatch("syrk!")) end
+           k  = size(A, trans == 'N' ? 2 : 1)
+           ccall(($(string(fname)),libblas), Void,
+                 (Ptr{Uint8}, Ptr{Uint8}, Ptr{BlasInt}, Ptr{BlasInt}, 
+                  Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}, Ptr{$elty}, 
+                  Ptr{$elty}, Ptr{BlasInt}),
                  &uplo, &trans, &n, &k, 
                  &alpha, A, &max(1,stride(A,2)), &beta, 
                  C, &max(1,stride(C,2)))
@@ -570,39 +568,103 @@ function syrk(uplo::BlasChar, trans::BlasChar, alpha::Number, A::StridedVecOrMat
 end
 syrk(uplo::BlasChar, trans::BlasChar, A::StridedVecOrMat) = syrk(uplo, trans, one(eltype(A)), A)
 
-## herk
-for (fname, elty) in ((:zherk_,:Complex128), 
-                      (:cherk_,:Complex64))
-    @eval begin
-             # SUBROUTINE CHERK(UPLO,TRANS,N,K,ALPHA,A,LDA,BETA,C,LDC)
-             # *     .. Scalar Arguments ..
-             #       REAL ALPHA,BETA
-             #       INTEGER K,LDA,LDC,N
-             #       CHARACTER TRANS,UPLO
-             # *     ..
-             # *     .. Array Arguments ..
-             #       COMPLEX A(LDA,*),C(LDC,*)
-        function herk!(uplo::BlasChar, trans::BlasChar, alpha::($elty), A::StridedVecOrMat{$elty}, beta::($elty), C::StridedMatrix{$elty})
-            m, n = size(C)
-            if m != n throw(DimensionMismatch("Matrix C must be square")) end
-            nn = size(A, trans == 'N' ? 1 : 2)
-            if nn != n throw(DimensionMismatch("")) end
-            k  = size(A, trans == 'N' ? 2 : 1)
-            ccall(($(string(fname)),libblas), Void,
-                (Ptr{Uint8}, Ptr{Uint8}, Ptr{BlasInt}, Ptr{BlasInt}, 
-                 Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}, Ptr{$elty}, 
-                 Ptr{$elty}, Ptr{BlasInt}),
+for (fname, elty) in ((:zherk_,:Complex128), (:cherk_,:Complex64))
+   @eval begin
+       # SUBROUTINE CHERK(UPLO,TRANS,N,K,ALPHA,A,LDA,BETA,C,LDC)
+       # *     .. Scalar Arguments ..
+       #       REAL ALPHA,BETA
+       #       INTEGER K,LDA,LDC,N
+       #       CHARACTER TRANS,UPLO
+       # *     ..
+       # *     .. Array Arguments ..
+       #       COMPLEX A(LDA,*),C(LDC,*)
+       function herk!(uplo::BlasChar, trans::BlasChar, alpha::($elty), A::StridedVecOrMat{$elty},
+                      beta::($elty), C::StridedMatrix{$elty})
+           n = chksquare(C)
+           n == size(A, trans == 'N' ? 1 : 2) || throw(DimensionMismatch("herk!"))
+           k  = size(A, trans == 'N' ? 2 : 1)
+           ccall(($(string(fname)),libblas), Void,
+                 (Ptr{Uint8}, Ptr{Uint8}, Ptr{BlasInt}, Ptr{BlasInt}, 
+                  Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}, Ptr{$elty}, 
+                  Ptr{$elty}, Ptr{BlasInt}),
                  &uplo, &trans, &n, &k, 
                  &alpha, A, &max(1,stride(A,2)), &beta, 
                  C, &max(1,stride(C,2)))
-            C
-        end
-        function herk(uplo::BlasChar, trans::BlasChar, alpha::($elty), A::StridedVecOrMat{$elty})
-            n = size(A, trans == 'N' ? 1 : 2)
-            herk!(uplo, trans, alpha, A, zero($elty), Array($elty, (n,n)))
-        end
-        herk(uplo::BlasChar, trans::BlasChar, A::StridedVecOrMat{$elty}) = herk(uplo, trans, one($elty), A)
-     end
+           C
+       end
+       function herk(uplo::BlasChar, trans::BlasChar, alpha::($elty), A::StridedVecOrMat{$elty})
+           n = size(A, trans == 'N' ? 1 : 2)
+           herk!(uplo, trans, alpha, A, zero($elty), Array($elty, (n,n)))
+       end
+       herk(uplo::BlasChar, trans::BlasChar, A::StridedVecOrMat{$elty}) = herk(uplo, trans, one($elty), A)
+   end
+end
+
+# (GB) general banded matrix-vector multiplication
+for (fname, elty) in ((:dgbmv_,:Float64), (:sgbmv_,:Float32),
+                      (:zgbmv_,:Complex128), (:cgbmv_,:Complex64))
+   @eval begin
+       # SUBROUTINE DGBMV(TRANS,M,N,KL,KU,ALPHA,A,LDA,X,INCX,BETA,Y,INCY)
+       # *     .. Scalar Arguments ..
+       #       DOUBLE PRECISION ALPHA,BETA
+       #       INTEGER INCX,INCY,KL,KU,LDA,M,N
+       #       CHARACTER TRANS
+       # *     .. Array Arguments ..
+       #       DOUBLE PRECISION A(LDA,*),X(*),Y(*)
+       function gbmv!(trans::BlasChar, m::Integer, kl::Integer, ku::Integer,
+                      alpha::($elty), A::StridedMatrix{$elty}, x::StridedVector{$elty},
+                      beta::($elty), y::StridedVector{$elty})
+           ccall(($(string(fname)),libblas), Void,
+                 (Ptr{Uint8}, Ptr{BlasInt}, Ptr{BlasInt}, Ptr{BlasInt}, Ptr{BlasInt},
+                  Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}, Ptr{$elty}, Ptr{BlasInt},
+                  Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}),
+                 &trans, &m, &size(A,2), &kl, &ku, 
+                 &alpha, A, &max(1,stride(A,2)), x, &stride(x,1), 
+                 &beta, y, &stride(y,1))
+           y
+       end
+       function gbmv(trans::BlasChar, m::Integer, kl::Integer, ku::Integer,
+                     alpha::($elty), A::StridedMatrix{$elty}, x::StridedVector{$elty})
+           n = stride(A,2)
+           gbmv!(trans, m, kl, ku, alpha, A, x, zero($elty), Array($elty, n))
+       end
+       function gbmv(trans::BlasChar, m::Integer, kl::Integer, ku::Integer,
+                     A::StridedMatrix{$elty}, x::StridedVector{$elty})
+           gbmv(trans, m, kl, ku, one($elty), A, x)
+       end
+   end
+end
+
+# (SB) symmetric banded matrix-vector multiplication
+for (fname, elty) in ((:dsbmv_,:Float64), (:ssbmv_,:Float32),
+                      (:zsbmv_,:Complex128), (:csbmv_,:Complex64))
+   @eval begin
+       #       SUBROUTINE DSBMV(UPLO,N,K,ALPHA,A,LDA,X,INCX,BETA,Y,INCY)
+       # *     .. Scalar Arguments ..
+       #       DOUBLE PRECISION ALPHA,BETA
+       #       INTEGER INCX,INCY,K,LDA,N
+       #       CHARACTER UPLO
+       # *     .. Array Arguments ..
+       #       DOUBLE PRECISION A(LDA,*),X(*),Y(*)
+       function sbmv!(uplo::BlasChar, k::Integer,
+                      alpha::($elty), A::StridedMatrix{$elty}, x::StridedVector{$elty}, 
+                      beta::($elty), y::StridedVector{$elty})
+           ccall(($(string(fname)),libblas), Void,
+                 (Ptr{Uint8}, Ptr{BlasInt}, Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt},
+                 Ptr{$elty}, Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}),
+                 &uplo, &size(A,2), &k, &alpha, A, &max(1,stride(A,2)), x, &stride(x,1),
+                 &beta, y, &stride(y,1))
+           y
+       end
+       function sbmv(uplo::BlasChar, k::Integer, alpha::($elty), A::StridedMatrix{$elty},
+                     x::StridedVector{$elty})
+           n = size(A,2)
+           sbmv!(uplo, k, alpha, A, x, zero($elty), Array($elty, n))
+       end
+       function sbmv(uplo::BlasChar, k::Integer, A::StridedMatrix{$elty}, x::StridedVector{$elty})
+           sbmv(uplo, k, one($elty), A, x)
+       end
+   end
 end
 
 ## (TR) Triangular matrix and vector multiplication and solution
@@ -612,44 +674,41 @@ for (mmname, smname, elty) in
          (:ztrmm_,:ztrsm_,:Complex128),
          (:ctrmm_,:ctrsm_,:Complex64))
     @eval begin
-                #       SUBROUTINE DTRMM(SIDE,UPLO,TRANSA,DIAG,M,N,ALPHA,A,LDA,B,LDB)
-                # *     .. Scalar Arguments ..
-                #       DOUBLE PRECISION ALPHA
-                #       INTEGER LDA,LDB,M,N
-                #       CHARACTER DIAG,SIDE,TRANSA,UPLO
-                # *     .. Array Arguments ..
-                #       DOUBLE PRECISION A(LDA,*),B(LDB,*)
-        function trmm!(side::Char, uplo::Char, transa::Char, diag::Char, alpha::Number, A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
+        #       SUBROUTINE DTRMM(SIDE,UPLO,TRANSA,DIAG,M,N,ALPHA,A,LDA,B,LDB)
+        # *     .. Scalar Arguments ..
+        #       DOUBLE PRECISION ALPHA
+        #       INTEGER LDA,LDB,M,N
+        #       CHARACTER DIAG,SIDE,TRANSA,UPLO
+        # *     .. Array Arguments ..
+        #       DOUBLE PRECISION A(LDA,*),B(LDB,*)
+        function trmm!(side::Char, uplo::Char, transa::Char, diag::Char, alpha::Number,
+                       A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
             m, n = size(B)
-            mA, nA = size(A)
-            if mA != nA throw(DimensionMismatch("matrix must be square")) end
-            if nA != (side == 'L' ? m : n) throw(DimensionMismatch("")) end
-                ccall(($(string(mmname)), libblas), Void,
-                      (Ptr{Uint8}, Ptr{Uint8}, Ptr{Uint8}, Ptr{Uint8}, 
-                       Ptr{BlasInt}, Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty}, 
-                       Ptr{BlasInt}, Ptr{$elty}, Ptr{BlasInt}),
-                       &side, &uplo, &transa, &diag, 
-                       &m, &n, &alpha, A, 
-                       &max(1,stride(A,2)), B, &max(1,stride(B,2)))
-                return B
-            end
-        function trmm(side::Char, uplo::Char, transa::Char, diag::Char, alpha::$elty, A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
+            nA = chksquare(A)
+            if nA != (side == 'L' ? m : n) throw(DimensionMismatch("trmm!")) end
+            ccall(($(string(mmname)), libblas), Void,
+                  (Ptr{Uint8}, Ptr{Uint8}, Ptr{Uint8}, Ptr{Uint8}, Ptr{BlasInt}, Ptr{BlasInt},
+                   Ptr{$elty}, Ptr{$elty}, Ptr{BlasInt}, Ptr{$elty}, Ptr{BlasInt}),
+                  &side, &uplo, &transa, &diag, &m, &n,
+                  &alpha, A, &max(1,stride(A,2)), B, &max(1,stride(B,2)))
+            B
+        end
+        function trmm(side::Char, uplo::Char, transa::Char, diag::Char,
+                      alpha::$elty, A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
             trmm!(side, uplo, transa, diag, alpha, A, copy(B))
         end
-
-                #       SUBROUTINE DTRSM(SIDE,UPLO,TRANSA,DIAG,M,N,ALPHA,A,LDA,B,LDB)
-                # *     .. Scalar Arguments ..
-                #       DOUBLE PRECISION ALPHA
-                #       INTEGER LDA,LDB,M,N
-                #       CHARACTER DIAG,SIDE,TRANSA,UPLO
-                # *     .. Array Arguments ..
-                #       DOUBLE PRECISION A(LDA,*),B(LDB,*)
-        function trsm!(side::Char, uplo::Char, transa::Char, diag::Char, alpha::$elty, A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
-            m, n = size(B); k,l = size(A)
-            if k != l throw(DimensionMismatch("size(A)=$(size(A)) should be square")) end
-            if k != (side == 'L' ? m : n)
-                throw(DimensionMismatch("size of A is $n, size(B)=($m,$n) and transa='$transa'"))
-            end
+        #       SUBROUTINE DTRSM(SIDE,UPLO,TRANSA,DIAG,M,N,ALPHA,A,LDA,B,LDB)
+        # *     .. Scalar Arguments ..
+        #       DOUBLE PRECISION ALPHA
+        #       INTEGER LDA,LDB,M,N
+        #       CHARACTER DIAG,SIDE,TRANSA,UPLO
+        # *     .. Array Arguments ..
+        #       DOUBLE PRECISION A(LDA,*),B(LDB,*)
+        function trsm!(side::Char, uplo::Char, transa::Char, diag::Char,
+                       alpha::$elty, A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
+            m, n = size(B)
+            k = chksquare(A)
+            k==(side == 'L' ? m : n) || throw(DimensionMismatch("size of A is $n, size(B)=($m,$n) and transa='$transa'"))
             ccall(($(string(smname)), libblas), Void,
                 (Ptr{Uint8}, Ptr{Uint8}, Ptr{Uint8}, Ptr{Uint8}, 
                  Ptr{BlasInt}, Ptr{BlasInt}, Ptr{$elty}, Ptr{$elty}, 
@@ -657,7 +716,7 @@ for (mmname, smname, elty) in
                  &side, &uplo, &transa, &diag, 
                  &m, &n, &alpha, A, 
                  &max(1,stride(A,2)), B, &max(1,stride(B,2)))
-            return B
+            B
         end
         function trsm(side::Char, uplo::Char, transa::Char, diag::Char, alpha::$elty, A::StridedMatrix{$elty}, B::StridedMatrix{$elty})
             trsm!(side, uplo, transa, diag, alpha, A, copy(B))
@@ -668,14 +727,12 @@ end
 end # module
 
 function copy!{T<:BlasFloat,Ti<:Integer}(dest::Array{T}, rdest::Union(Range1{Ti},Range{Ti}), 
-                                         src::Array{T}, rsrc::Union(Range1{Ti},Range{Ti}))
+                                          src::Array{T}, rsrc::Union(Range1{Ti},Range{Ti}))
     if minimum(rdest) < 1 || maximum(rdest) > length(dest) || minimum(rsrc) < 1 || maximum(rsrc) > length(src)
         throw(BoundsError())
     end
-    if length(rdest) != length(rsrc)
-        throw(DimensionMismatch("ranges must be of the same length"))
-    end
+    length(rdest)==length(rsrc) || throw(DimensionMismatch("Ranges must be of the same length"))
     BLAS.blascopy!(length(rsrc), pointer(src)+(first(rsrc)-1)*sizeof(T), step(rsrc),
                    pointer(dest)+(first(rdest)-1)*sizeof(T), step(rdest))
-    return dest
+    dest
 end
